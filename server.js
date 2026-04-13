@@ -57,8 +57,9 @@ function downloadVideo(url, outputPath) {
       '--no-playlist',
       '--format', '18/best[ext=mp4][height<=480]/best[height<=480]/best',
       '--output', outputPath,
-      '--extractor-args', 'youtube:player_client=android_vr,web',
+      '--extractor-args', 'youtube:player_client=ios,android,web',
       '--no-check-certificates',
+      '--no-warnings',
       url
     ];
     const proc = execFile(YTDLP, args, { timeout: 120000 });
