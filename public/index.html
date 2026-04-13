@@ -36,35 +36,14 @@
       overflow-x: hidden;
     }
 
-    /* ── Dot canvas ── */
-    #dot-canvas {
+    /* ── Grain canvas ── */
+    #bg-canvas {
       position: fixed;
       inset: 0;
       width: 100%;
       height: 100%;
       z-index: 0;
       pointer-events: none;
-    }
-
-    /* ── Film grain ── */
-    .grain {
-      position: fixed;
-      inset: -50%;
-      width: 200%;
-      height: 200%;
-      pointer-events: none;
-      z-index: 9999;
-      opacity: 0.034;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='400' height='400' filter='url(%23n)'/%3E%3C/svg%3E");
-      animation: grain 0.4s steps(1) infinite;
-    }
-    @keyframes grain {
-      0%   { transform: translate(0, 0); }
-      20%  { transform: translate(-3%, 2%); }
-      40%  { transform: translate(2%, -3%); }
-      60%  { transform: translate(-2%, 3%); }
-      80%  { transform: translate(3%, -1%); }
-      100% { transform: translate(-1%, 2%); }
     }
 
     /* ── Page ── */
@@ -416,8 +395,7 @@
 </head>
 <body>
 
-<canvas id="dot-canvas"></canvas>
-<div class="grain"></div>
+<canvas id="bg-canvas"></canvas>
 
 <div class="page">
 
@@ -479,119 +457,86 @@
 </div>
 
 <script>
-// ── DOT CANVAS BACKGROUND ─────────────────────────────────────────────────────
+// ── FILM GRAIN + CURSOR SPOTLIGHT ────────────────────────────────────────────
 (function () {
-  const canvas = document.getElementById('dot-canvas');
+  const canvas = document.getElementById('bg-canvas');
   const ctx    = canvas.getContext('2d');
   const DPR    = Math.min(window.devicePixelRatio || 1, 2);
 
-  const SPACING   = 26;   // grid spacing px (logical)
-  const RADIUS    = 1.2;  // dot radius px (logical)
-  const INFLUENCE = 120;  // cursor influence radius px
-  const MAX_PUSH  = 14;   // max displacement px
-  const LERP      = 0.055;// smoothing factor
+  // Offscreen at reduced resolution for perf — grain looks better slightly coarse
+  const SCALE = 0.4;
+  const off   = document.createElement('canvas');
+  const octx  = off.getContext('2d');
 
-  let W, H, cols, rows, dots = [];
-  let pX = -999, pY = -999; // pointer in logical px
-  let time = 0;
+  let W, H, GW, GH;
+  let pX = -1, pY = -1;
+  let last = 0;
 
-  function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
-
-  function build() {
-    const rect = canvas.parentElement.getBoundingClientRect();
-    W = rect.width  || window.innerWidth;
-    H = rect.height || window.innerHeight;
-
+  function resize() {
+    W  = window.innerWidth;
+    H  = window.innerHeight;
+    GW = Math.ceil(W * SCALE);
+    GH = Math.ceil(H * SCALE);
     canvas.width  = W * DPR;
     canvas.height = H * DPR;
     canvas.style.width  = W + 'px';
     canvas.style.height = H + 'px';
-    ctx.scale(DPR, DPR);
-
-    cols = Math.ceil(W / SPACING) + 1;
-    rows = Math.ceil(H / SPACING) + 1;
-    dots = [];
-
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const ox = c * SPACING;
-        const oy = r * SPACING;
-        dots.push({ ox, oy, x: ox, y: oy, tx: ox, ty: oy });
-      }
-    }
+    off.width  = GW;
+    off.height = GH;
   }
 
   function draw(ts) {
-    time = ts;
-    ctx.clearRect(0, 0, W, H);
+    requestAnimationFrame(draw);
+    if (ts - last < 1000 / 24) return; // cap at 24 fps
+    last = ts;
 
-    // Vignette fade: dots dimmer toward edges
-    const cx = W / 2, cy = H / 2;
-    const maxD = Math.sqrt(cx * cx + cy * cy);
+    // Dark base
+    octx.fillStyle = '#07070a';
+    octx.fillRect(0, 0, GW, GH);
 
-    for (const d of dots) {
-      // Distance from cursor
-      const dx   = d.ox - pX;
-      const dy   = d.oy - pY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+    // Random grain pixels
+    const img = octx.createImageData(GW, GH);
+    const d   = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // Quadratic distribution: mostly dark, rare bright speckles
+      const n = Math.random() * Math.random();
+      const v = Math.floor(7 + n * 90);
+      d[i] = d[i+1] = d[i+2] = v;
+      d[i+3] = 255;
+    }
+    octx.putImageData(img, 0, 0);
 
-      if (dist < INFLUENCE && dist > 0) {
-        const ease   = easeOut(1 - dist / INFLUENCE);
-        const pushX  = (dx / dist) * MAX_PUSH * ease;
-        const pushY  = (dy / dist) * MAX_PUSH * ease;
-        d.tx = d.ox + pushX;
-        d.ty = d.oy + pushY;
-      } else {
-        d.tx = d.ox;
-        d.ty = d.oy;
-      }
-
-      // LERP toward target
-      d.x += (d.tx - d.x) * LERP;
-      d.y += (d.ty - d.y) * LERP;
-
-      // Vignette fade
-      const edgeDx = d.ox - cx;
-      const edgeDy = d.oy - cy;
-      const edgeDist = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy);
-      const fade = Math.max(0, 1 - (edgeDist / maxD) * 0.75);
-
-      // Color: idle = subtle white, active near cursor = pale purple
-      let alpha = 0.1 * fade;
-      let r = 255, g = 255, b = 255;
-
-      if (dist < INFLUENCE) {
-        const ease     = easeOut(1 - dist / INFLUENCE);
-        const angle    = Math.atan2(dy, dx);
-        const wave     = (Math.sin(angle * 2 + time * 0.001) + 1) / 2;
-        // blend white → pale purple/violet
-        const t = ease * wave;
-        r = Math.round(255 - t * 45);  // 255→210
-        g = Math.round(255 - t * 90);  // 255→165
-        b = 255;
-        alpha = (0.1 + ease * 0.35) * fade;
-      }
-
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, RADIUS, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
-      ctx.fill();
+    // Cursor spotlight — soft radial glow, very cinematic
+    if (pX >= 0) {
+      const cx = (pX / W) * GW;
+      const cy = (pY / H) * GH;
+      const r  = GW * 0.32;
+      const grd = octx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grd.addColorStop(0,   'rgba(255,255,255,0.10)');
+      grd.addColorStop(0.35,'rgba(255,255,255,0.04)');
+      grd.addColorStop(1,   'rgba(0,0,0,0)');
+      octx.fillStyle = grd;
+      octx.globalCompositeOperation = 'lighter';
+      octx.fillRect(0, 0, GW, GH);
+      octx.globalCompositeOperation = 'source-over';
     }
 
-    requestAnimationFrame(draw);
+    // Scale up to screen canvas
+    ctx.save();
+    ctx.scale(DPR, DPR);
+    ctx.drawImage(off, 0, 0, W, H);
+    ctx.restore();
   }
 
-  // Pointer tracking
   window.addEventListener('mousemove', e => { pX = e.clientX; pY = e.clientY; });
-  window.addEventListener('mouseleave', ()  => { pX = -999; pY = -999; });
-  window.addEventListener('touchmove', e => {
-    pX = e.touches[0].clientX;
-    pY = e.touches[0].clientY;
+  window.addEventListener('mouseleave', ()  => { pX = -1; pY = -1; });
+  window.addEventListener('touchmove',  e => {
+    pX = e.touches[0].clientX; pY = e.touches[0].clientY;
   }, { passive: true });
-  window.addEventListener('touchend', () => { pX = -999; pY = -999; });
-  window.addEventListener('resize', build);
+  window.addEventListener('touchend', () => { pX = -1; pY = -1; });
+  window.addEventListener('resize', resize);
 
-  build();
+  resize();
   requestAnimationFrame(draw);
 })();
 
