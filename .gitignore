@@ -1,0 +1,5 @@
+node_modules/
+gifs/
+tmp/
+*.mp4
+.env
